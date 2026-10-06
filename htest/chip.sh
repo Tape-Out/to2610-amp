@@ -61,10 +61,10 @@ run xio "to2610-soc 的外设测试：十五个外设的地址、七个经复用
 
 make -s -C htest/rtos O="$O/rtosb" KVC="$L"
 make -s -C htest/amp O="$O/amp" ECHO="$L/htest/echo"
-# Flash 里：头 1 MiB 放第二个核的镜像，1 MiB 处是引导程序，其后是第一个核的载荷
-python3 "$L/sw/pack.py" "$O/boot/boot.bin" "$O/amp/amp.bin" "$O/amp.flash"
+# Flash 镜像用交付的那个打包脚本拼：头 1 MiB 放第二个核的镜像，1 MiB 处是引导程序，其后是第一个核的载荷
+python3 sw/pack.py "$O/boot/boot.bin" "$O/amp/amp.bin" "$O/rtosb/rtos.bin" "$O/amp.flash"
 run amp "两个核一起：第二个核没放开时门铃是安静的；放开后它把 FreeRTOS 搬进 SDRAM 顶上起调度器，五个数与最后一句经门铃中断逐句到第一个核，两个方向的字都对；收回去之后不再响" \
-  +flash="$O/amp.flash@0" +flash="$O/rtosb/rtos.bin@0" +script=htest/amp/script +max=100000000
+  +flash="$O/amp.flash@0" +script=htest/amp/script +max=100000000
 
 python3 "$L/htest/junit.py" "$O/results.xml" "${res[@]}"
 printf '%s\n' "${res[@]}"
