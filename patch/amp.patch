@@ -1,0 +1,246 @@
+--- a/src/chip_core.sv
++++ b/src/chip_core.sv
+@@ -27,7 +27,9 @@
+     output wire [31:0] xio_wdata,
+     input  wire [31:0] xio_rdata,
+     input  wire        xio_ready,
+-    input  wire [20:0] xio_irq
++    input  wire [20:0] xio_irq,
++    input  wire        b_run,
++    input  wire        b_meip
+ );
+     // ============================================================
+     // Pad Configuration Defaults (GF180 standard)
+@@ -141,7 +143,9 @@
+         .xio_wdata  (xio_wdata),
+         .xio_rdata  (xio_rdata),
+         .xio_ready  (xio_ready),
+-        .xio_irq    (xio_irq)
++        .xio_irq    (xio_irq),
++        .b_run      (b_run),
++        .b_meip     (b_meip)
+     );
+ 
+     // ============================================================
+--- a/src/soc.v
++++ b/src/soc.v
+@@ -71,7 +71,9 @@
+     output wire [31:0] xio_wdata,
+     input  wire [31:0] xio_rdata,
+     input  wire        xio_ready,
+-    input  wire [20:0] xio_irq
++    input  wire [20:0] xio_irq,
++    input  wire        b_run,
++    input  wire        b_meip
+ );
+ 
+   wire clk = clk_osc;
+@@ -113,6 +115,14 @@
+   wire [29:0] word_aligned_addr = cpu_mem_addr[31:2];
+ 
+   wire is_instruction, icache_flush;
++  wire        a_valid, a_ready, a_fault, a_instr;
++  wire [ 3:0] a_wstrb;
++  wire [33:0] a_addr;
++  wire [31:0] a_wdata;
++  wire        b_valid, b_ready, b_fault, b_instr, b_irq3, b_irq7, b_go;
++  wire [ 3:0] b_wstrb;
++  wire [33:0] b_addr;
++  wire [31:0] b_wdata;
+   wire [5:0] ctrl_state;
+ 
+   wire       is_reboot_addr = (cpu_mem_addr == `REBOOT_ADDR);
+@@ -432,6 +442,26 @@
+       .IRQ7           (IRQ7)
+   );
+ 
++  wire clint_b_ready, clint_b_valid_vis;
++  wire [31:0] clint_b_rdata;
++
++  clint_if #(
++      .BASE_HI(8'h03)
++  ) clint_if_B (
++      .clk            (clk),
++      .resetn         (resetn_soc),
++      .bus_valid_i    (cpu_mem_valid),
++      .bus_addr_i     (cpu_mem_addr),
++      .bus_wstrb_i    (cpu_mem_wstrb),
++      .bus_wdata_i    (cpu_mem_wdata),
++      .bus_rdata_o    (clint_b_rdata),
++      .bus_ready_o    (clint_b_ready),
++      .is_valid_o     (clint_b_valid_vis),
++      .timer_counter_i(mtime_for_system),
++      .IRQ3           (b_irq3),
++      .IRQ7           (b_irq7)
++  );
++
+   wire uart_irq = ~(&uart_rx_data_obs) || uart_tx_busy_obs;
+   wire [31:1] plic_irqs = {xio_irq, uart_irq, 9'b0};
+ 
+@@ -479,14 +509,15 @@
+   wire match_rx = (cpu_mem_addr == `UART_RX_ADDR0);
+ 
+   wire is_io = (cpu_mem_addr >= 32'h10_000_000 && cpu_mem_addr <= 32'h12_000_000) ||
+-               (cpu_mem_addr[31:24] == 8'h0C) || (cpu_mem_addr[31:24] == 8'h02);
++               (cpu_mem_addr[31:24] == 8'h0C) || (cpu_mem_addr[31:24] == 8'h02) ||
++               (cpu_mem_addr[31:24] == 8'h03);
+ 
+   wire spi_mem_valid0 = cpu_mem_valid && hit_spi0;
+   wire spi_mem_valid1 = cpu_mem_valid && hit_spi1;
+   wire gpio_valid = cpu_mem_valid && hit_gpio;
+ 
+   wire unmatched_io = !(match_lsr || match_tx || match_rx ||
+-                        clint_valid_vis || plic_valid_vis ||
++                        clint_valid_vis || clint_b_valid_vis || plic_valid_vis ||
+                         spi_mem_valid0 || spi_mem_valid1 ||
+                         div0_valid_seen || div1_valid_seen || gpio_valid ||
+                         sys_cpu_freq_valid || sys_mem_size_valid ||
+@@ -519,6 +550,9 @@
+       end else if (clint_ready) begin
+         io_ready = 1'b1;
+         io_rdata = clint_rdata;
++      end else if (clint_b_ready) begin
++        io_ready = 1'b1;
++        io_rdata = clint_b_rdata;
+       end else if (plic_ready) begin
+         io_ready = 1'b1;
+         io_rdata = plic_rdata;
+@@ -563,15 +597,15 @@
+       .clk            (clk),
+       .resetn         (resetn_soc),
+       .sysclk_mhz_q8_8(sysclk_mhz_q8_8),
+-      .mem_ready      (cpu_mem_ready),
+-      .mem_valid      (cpu_mem_valid),
+-      .mem_wstrb      (cpu_mem_wstrb),
+-      .mem_addr       (cpu_mem_addr_phy),
+-      .mem_wdata      (cpu_mem_wdata),
++      .mem_ready      (a_ready),
++      .mem_valid      (a_valid),
++      .mem_wstrb      (a_wstrb),
++      .mem_addr       (a_addr),
++      .mem_wdata      (a_wdata),
+       .mem_rdata      (cpu_mem_rdata),
+-      .access_fault   (access_fault_ready),
++      .access_fault   (a_fault),
+       .timer_counter  (timer_counter),
+-      .is_instruction (is_instruction),
++      .is_instruction (a_instr),
+       .icache_flush   (icache_flush),
+       .IRQ3           (IRQ3),
+       .IRQ7           (IRQ7),
+@@ -580,6 +614,59 @@
+       .PC             ()
+   );
+ 
++  kianv_harris_mc_edition #(
++      .RESET_ADDR      (32'h2000_0000),
++      .NUM_ENTRIES_ITLB(`NUM_ENTRIES_ITLB),
++      .NUM_ENTRIES_DTLB(`NUM_ENTRIES_DTLB)
++  ) kianv_B (
++      .clk            (clk),
++      .resetn         (resetn_soc && b_go),
++      .sysclk_mhz_q8_8(sysclk_mhz_q8_8),
++      .mem_ready      (b_ready),
++      .mem_valid      (b_valid),
++      .mem_wstrb      (b_wstrb),
++      .mem_addr       (b_addr),
++      .mem_wdata      (b_wdata),
++      .mem_rdata      (cpu_mem_rdata),
++      .access_fault   (b_fault),
++      .timer_counter  (),
++      .is_instruction (b_instr),
++      .icache_flush   (),
++      .IRQ3           (b_irq3),
++      .IRQ7           (b_irq7),
++      .IRQ9           (1'b0),
++      .IRQ11          (b_meip),
++      .PC             ()
++  );
++
++  amp_arb arb_I (
++      .clk    (clk),
++      .resetn (resetn_soc),
++      .a_valid(a_valid),
++      .a_wstrb(a_wstrb),
++      .a_addr (a_addr),
++      .a_wdata(a_wdata),
++      .a_instr(a_instr),
++      .a_ready(a_ready),
++      .a_fault(a_fault),
++      .b_valid(b_valid),
++      .b_wstrb(b_wstrb),
++      .b_addr (b_addr),
++      .b_wdata(b_wdata),
++      .b_instr(b_instr),
++      .b_ready(b_ready),
++      .b_fault(b_fault),
++      .b_run  (b_run),
++      .b_go   (b_go),
++      .valid  (cpu_mem_valid),
++      .wstrb  (cpu_mem_wstrb),
++      .addr   (cpu_mem_addr_phy),
++      .wdata  (cpu_mem_wdata),
++      .instr  (is_instruction),
++      .ready  (cpu_mem_ready),
++      .fault  (access_fault_ready)
++  );
++
+   assign cpu_mem_ready =
+       (is_sdram && mem_sdram_valid && mem_sdram_ready) ||
+       (is_flash && spi_nor_ready) ||
+--- a/src/soc_core.v
++++ b/src/soc_core.v
+@@ -57,6 +57,7 @@
+   wire [31:0] xio_addr, xio_wdata, xio_rdata;
+   wire [ 3:0] xio_wstrb;
+   wire [20:0] xio_irq;
++  wire        b_run, amp_irq_a, amp_irq_b;
+ 
+   chip_core core (
+       .clk       (clk),
+@@ -76,7 +77,9 @@
+       .xio_wdata (xio_wdata),
+       .xio_rdata (xio_rdata),
+       .xio_ready (xio_ready),
+-      .xio_irq   (xio_irq)
++      .xio_irq   (xio_irq),
++      .b_run     (b_run),
++      .b_meip    (amp_irq_b)
+   );
+ 
+   wire        psel, penable, pwrite, pready, pslverr;
+@@ -106,6 +109,8 @@
+ 
+   wire        io_sel = paddr[27:16] == 12'h000;
+   wire        sys_sel = paddr[27:16] == 12'h003;
++  wire        amp_sel = paddr[27:16] == 12'h004;
++  wire [31:0] amp_prdata;
+   wire        io_pready, io_pslverr;
+   wire [31:0] io_prdata, sys_prdata;
+   wire [14:0] io_irqs;
+@@ -176,9 +181,23 @@
+       .padsel (padsel)
+   );
+ 
++  amp_ctl amp (
++      .clk    (clk),
++      .rst_n  (xio_resetn),
++      .psel   (psel && amp_sel),
++      .penable(penable),
++      .pwrite (pwrite),
++      .paddr  (paddr[7:0]),
++      .pwdata (pwdata),
++      .prdata (amp_prdata),
++      .run    (b_run),
++      .irq_a  (amp_irq_a),
++      .irq_b  (amp_irq_b)
++  );
++
+   assign pready  = io_sel ? io_pready : 1'b1;
+-  assign prdata  = io_sel ? io_prdata : sys_sel ? sys_prdata : 32'h0;
++  assign prdata  = io_sel ? io_prdata : sys_sel ? sys_prdata : amp_sel ? amp_prdata : 32'h0;
+   assign pslverr = io_sel && io_pslverr;
+-  assign xio_irq = {6'b0, io_irqs};
++  assign xio_irq = {5'b0, amp_irq_a, io_irqs};
+ endmodule
+ `default_nettype wire

@@ -1,0 +1,19 @@
+reject BAD
+reject stuck
+reject trap 
+reject irq 
+reject b at b0e
+reject b at b0f
+reject amp got a55e
+expect sum ok, jump
+expect to2610 amp
+expect ident ok 414d5031
+expect quiet ok 00000000
+expect amp got 00000001
+expect amp got 00000002
+expect amp got 00000003
+expect amp got 00000004
+expect amp got 00000005
+expect amp ok d0e5123f
+expect stop ok 00000000
+expect done
