@@ -1,41 +1,6 @@
---- a/src/chip_core.sv
-+++ b/src/chip_core.sv
-@@ -27,7 +27,9 @@
-     output wire [31:0] xio_wdata,
-     input  wire [31:0] xio_rdata,
-     input  wire        xio_ready,
--    input  wire [20:0] xio_irq
-+    input  wire [20:0] xio_irq,
-+    input  wire        b_run,
-+    input  wire        b_meip
- );
-     // ============================================================
-     // Pad Configuration Defaults (GF180 standard)
-@@ -141,7 +143,9 @@
-         .xio_wdata  (xio_wdata),
-         .xio_rdata  (xio_rdata),
-         .xio_ready  (xio_ready),
--        .xio_irq    (xio_irq)
-+        .xio_irq    (xio_irq),
-+        .b_run      (b_run),
-+        .b_meip     (b_meip)
-     );
- 
-     // ============================================================
 --- a/src/soc.v
 +++ b/src/soc.v
-@@ -71,7 +71,9 @@
-     output wire [31:0] xio_wdata,
-     input  wire [31:0] xio_rdata,
-     input  wire        xio_ready,
--    input  wire [20:0] xio_irq
-+    input  wire [20:0] xio_irq,
-+    input  wire        b_run,
-+    input  wire        b_meip
- );
- 
-   wire clk = clk_osc;
-@@ -113,6 +115,14 @@
+@@ -105,6 +105,16 @@
    wire [29:0] word_aligned_addr = cpu_mem_addr[31:2];
  
    wire is_instruction, icache_flush;
@@ -43,14 +8,24 @@
 +  wire [ 3:0] a_wstrb;
 +  wire [33:0] a_addr;
 +  wire [31:0] a_wdata;
-+  wire        b_valid, b_ready, b_fault, b_instr, b_irq3, b_irq7, b_go;
++  wire        b_valid, b_ready, b_fault, b_instr, b_irq3, b_irq7, b_go, b_run, b_meip;
 +  wire [ 3:0] b_wstrb;
 +  wire [33:0] b_addr;
 +  wire [31:0] b_wdata;
++  wire        amp_ready, amp_irq_a;
++  wire [31:0] amp_rdata;
    wire [5:0] ctrl_state;
  
    wire       is_reboot_addr = (cpu_mem_addr == `REBOOT_ADDR);
-@@ -432,6 +442,26 @@
+@@ -119,6 +129,7 @@
+ 
+   wire is_sdram = (cpu_mem_addr >= `SDRAM_MEM_ADDR_START && cpu_mem_addr < `SDRAM_MEM_ADDR_END);
+   wire is_flash = (cpu_mem_addr >= `SPI_NOR_MEM_ADDR_START && cpu_mem_addr < `SPI_NOR_MEM_ADDR_END);
++  wire is_amp = (cpu_mem_addr[31:8] == 24'h4004_00);
+   wire hit_spi0 = (cpu_mem_addr == `KIANV_SPI_CTRL0 || cpu_mem_addr == `KIANV_SPI_DATA0);
+   wire hit_spi1 = (cpu_mem_addr == `KIANV_SPI_CTRL1 || cpu_mem_addr == `KIANV_SPI_DATA1);
+   wire hit_gpio = (cpu_mem_addr == `KIANV_GPIO_DIR   ||
+@@ -417,8 +428,28 @@
        .IRQ7           (IRQ7)
    );
  
@@ -75,9 +50,12 @@
 +  );
 +
    wire uart_irq = ~(&uart_rx_data_obs) || uart_tx_busy_obs;
-   wire [31:1] plic_irqs = {xio_irq, uart_irq, 9'b0};
+-  wire [31:1] plic_irqs = {21'b0, uart_irq, 9'b0};
++  wire [31:1] plic_irqs = {5'b0, amp_irq_a, 15'b0, uart_irq, 9'b0};
  
-@@ -479,14 +509,15 @@
+   plic_if #(
+       .BASE_HI(8'h0C)
+@@ -464,14 +495,15 @@
    wire match_rx = (cpu_mem_addr == `UART_RX_ADDR0);
  
    wire is_io = (cpu_mem_addr >= 32'h10_000_000 && cpu_mem_addr <= 32'h12_000_000) ||
@@ -95,7 +73,7 @@
                          spi_mem_valid0 || spi_mem_valid1 ||
                          div0_valid_seen || div1_valid_seen || gpio_valid ||
                          sys_cpu_freq_valid || sys_mem_size_valid ||
-@@ -519,6 +550,9 @@
+@@ -504,6 +536,9 @@
        end else if (clint_ready) begin
          io_ready = 1'b1;
          io_rdata = clint_rdata;
@@ -105,7 +83,16 @@
        end else if (plic_ready) begin
          io_ready = 1'b1;
          io_rdata = plic_rdata;
-@@ -563,15 +597,15 @@
+@@ -530,7 +565,7 @@
+   end
+ 
+   reg access_fault_ready;
+-  wire non_instruction_invalid_access = !is_instruction && !(is_io || is_sdram || is_flash || is_reboot);
++  wire non_instruction_invalid_access = !is_instruction && !(is_io || is_sdram || is_flash || is_reboot || is_amp);
+   wire instruction_invalid_access = is_instruction && !(is_sdram || is_flash);
+   wire hit_access_fault_valid         = `ENABLE_ACCESS_FAULT &&
+                                         (cpu_mem_valid &&
+@@ -548,15 +583,15 @@
        .clk            (clk),
        .resetn         (resetn_soc),
        .sysclk_mhz_q8_8(sysclk_mhz_q8_8),
@@ -128,7 +115,7 @@
        .icache_flush   (icache_flush),
        .IRQ3           (IRQ3),
        .IRQ7           (IRQ7),
-@@ -580,6 +614,59 @@
+@@ -565,12 +600,80 @@
        .PC             ()
    );
  
@@ -185,63 +172,35 @@
 +      .fault  (access_fault_ready)
 +  );
 +
++  amp_ctl amp_I (
++      .clk        (clk),
++      .resetn     (resetn_soc),
++      .bus_valid_i(cpu_mem_valid && is_amp),
++      .bus_addr_i (cpu_mem_addr),
++      .bus_wstrb_i(cpu_mem_wstrb),
++      .bus_wdata_i(cpu_mem_wdata),
++      .bus_rdata_o(amp_rdata),
++      .bus_ready_o(amp_ready),
++      .run        (b_run),
++      .irq_a      (amp_irq_a),
++      .irq_b      (b_meip)
++  );
++
    assign cpu_mem_ready =
        (is_sdram && mem_sdram_valid && mem_sdram_ready) ||
        (is_flash && spi_nor_ready) ||
---- a/src/soc_core.v
-+++ b/src/soc_core.v
-@@ -73,6 +73,7 @@
-   wire [31:0] xio_addr, xio_wdata, xio_rdata;
-   wire [ 3:0] xio_wstrb;
-   wire [20:0] xio_irq;
-+  wire        b_run, amp_irq_a, amp_irq_b;
+       (hit_spi0 && spi0_ready) ||
+       (hit_spi1 && spi1_ready) ||
+       (hit_gpio && gpio_ready) ||
++      (is_amp   && amp_ready) ||
+       (is_io    && io_ready) ||
+       (hit_access_fault_valid && access_fault_ready);
  
-   chip_core core (
-       .clk       (clk),
-@@ -92,7 +93,9 @@
-       .xio_wdata (xio_wdata),
-       .xio_rdata (xio_rdata),
-       .xio_ready (xio_ready),
--      .xio_irq   (xio_irq)
-+      .xio_irq   (xio_irq),
-+      .b_run     (b_run),
-+      .b_meip    (amp_irq_b)
-   );
+@@ -580,6 +683,7 @@
+       (hit_spi0 && spi0_ready)      ? spi0_rdata      :
+       (hit_spi1 && spi1_ready)      ? spi1_rdata      :
+       (hit_gpio && gpio_ready)      ? gpio_rdata      :
++      (is_amp   && amp_ready)       ? amp_rdata       :
+       (is_io    && io_ready)        ? io_rdata        :
+       32'h0000_0000;
  
-   wire        psel, penable, pwrite, pready, pslverr;
-@@ -124,6 +127,8 @@
-   wire        sd_sel = paddr[27:16] == 12'h001;
-   wire        sdm_sel = paddr[27:16] == 12'h002;
-   wire        sys_sel = paddr[27:16] == 12'h003;
-+  wire        amp_sel = paddr[27:16] == 12'h004;
-+  wire [31:0] amp_prdata;
-   wire        clk_sel = paddr[27:16] == 12'h005;
-   wire        io_pready, io_pslverr, sd_irq;
-   wire [31:0] io_prdata, sd_prdata, sdm_prdata, sys_prdata, clk_prdata;
-@@ -255,10 +260,24 @@
-       .padsel (padsel)
-   );
- 
-+  amp_ctl amp (
-+      .clk    (clk),
-+      .rst_n  (xio_resetn),
-+      .psel   (psel && amp_sel),
-+      .penable(penable),
-+      .pwrite (pwrite),
-+      .paddr  (paddr[7:0]),
-+      .pwdata (pwdata),
-+      .prdata (amp_prdata),
-+      .run    (b_run),
-+      .irq_a  (amp_irq_a),
-+      .irq_b  (amp_irq_b)
-+  );
-+
-   assign pready  = io_sel ? io_pready : 1'b1;
-   assign prdata  = io_sel ? io_prdata : sd_sel ? sd_prdata : sdm_sel ? sdm_prdata : sys_sel ? sys_prdata :
--                   clk_sel ? clk_prdata : 32'h0;
-+                   clk_sel ? clk_prdata : amp_sel ? amp_prdata : 32'h0;
-   assign pslverr = io_sel && io_pslverr;
--  assign xio_irq = {4'b0, sd_irq, 1'b0, io_irqs};
-+  assign xio_irq = {4'b0, sd_irq, amp_irq_a, io_irqs};
- endmodule
- `default_nettype wire

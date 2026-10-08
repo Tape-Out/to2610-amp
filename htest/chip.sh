@@ -1,23 +1,20 @@
 #!/usr/bin/env bash
-# 整片测试，全部跑在 ran asic 出的那份 .v 上。测试台、片外模型来自黑盒仓，引导程序来自 to2610-kvc，
-# 复用焊盘上的回环与外设测试来自 to2610-soc。
+# 整片测试，全部跑在 ran asic 出的那份 .v 上。测试台、片外模型来自黑盒仓，引导程序与测试台的引脚包装来自 to2610-kvc。
 #   hello、periph、isa、boot  to2610-kvc 的四段原样跑：第二个核没放开时，这一颗与单核的那一颗一样
-#   xio    to2610-soc 的外设测试原样跑
 #   amp    两个核一起：第一个核放开第二个核，第二个核上的 FreeRTOS 经核间那一页报数，门铃进第一个核的中断
-# 用法：chip.sh <输出目录> <gf180mcu-kianv-rv32ima-sv32 仓> <to2610-kvc 仓> <to2610-soc 仓>。
+# 用法：chip.sh <输出目录> <gf180mcu-kianv-rv32ima-sv32 仓> <to2610-kvc 仓>。
 # 已经跑过 ran asic 的，把输出目录给 CHIP_ASIC
 set -euo pipefail
 cd "$(dirname "$0")/.."
 O=$(realpath -m "$1")
 K=$(realpath "$2")
 L=$(realpath "$3")
-S=$(realpath "$4")
 rm -rf "$O"
 mkdir -p "$O"
 A=${CHIP_ASIC:-$O/asic}
 [ -s "$A/report.json" ] || $XIRANG asic to2610-amp --no-run -o "$A"
 top=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['top'])" "$A/report.json")
-python3 "$S/htest/shim.py" "$A/report.json" > "$O/tb.v"
+python3 "$L/htest/shim.py" "$A/report.json" > "$O/tb.v"
 bash "$K/htest/sim.sh" "$O/sim" "$O/tb.v" "$A/$top.v"
 
 res=()
@@ -50,15 +47,6 @@ run boot "引导程序搬载荷并核对校验和，载荷回显串口" \
   +flash="$O/echo.flash@0" +script="$L/htest/echo/script" +max=60000000
 
 # 寄存器偏移不手抄：让息壤照各 IP 的 regmap.yaml 出头文件
-mkdir -p "$O/xio/inc"
-for ip in uart gpio timer wdt rtc i2c spi onew i2s can ps2 rng emac pwm crc; do
-  $XIRANG gen "$ip" -o "$O/xio/gen/$ip" > /dev/null
-  cp "$O/xio/gen/$ip/sw/$ip.h" "$O/xio/inc/"
-done
-make -s -C "$S/htest/xio" O="$O/xio" HELLO="$K/htest/hello"
-run xio "to2610-soc 的外设测试：十五个外设的地址、七个经复用焊盘走通、三路中断" \
-  +flash="$O/xio/xio.bin@0x100000" +script="$S/htest/xio/script" +max=60000000
-
 make -s -C htest/rtos O="$O/rtosb" KVC="$L"
 make -s -C htest/amp O="$O/amp" ECHO="$L/htest/echo"
 # Flash 镜像用交付的那个打包脚本拼：头 1 MiB 放第二个核的镜像，1 MiB 处是引导程序，其后是第一个核的载荷
