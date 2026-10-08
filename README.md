@@ -1,10 +1,10 @@
 # to2610-amp
 
-An asymmetric two-core chip for the ECOS 2610 shuttle: [`to2610-soc`](https://github.com/Tape-Out/to2610-soc) with a second KianV core that runs an RTOS beside Linux, sharing the bus through an arbiter and talking through a page of doorbells.
+An asymmetric two-core chip for the ECOS 2610 shuttle: [`to2610-kvc`](https://github.com/Tape-Out/to2610-kvc) with a second KianV core that runs an RTOS beside Linux, sharing the bus through an arbiter and talking through a page of doorbells.
 
 ![maturity](https://img.shields.io/badge/maturity-simulated-yellow) ![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue)
 
-The core is upstream's KianV, its submodule untouched, taken from [`gf180mcu-kianv-rv32ima-sv32`](https://github.com/Tape-Out/gf180mcu-kianv-rv32ima-sv32); the peripherals and the pads are those of `to2610-soc`. What this repository adds:
+The core is upstream's KianV, its submodule untouched, taken from [`gf180mcu-kianv-rv32ima-sv32`](https://github.com/Tape-Out/gf180mcu-kianv-rv32ima-sv32); the peripherals and the pads are those of `to2610-kvc`. What this repository adds:
 
 | File | What |
 |:--:|:--:|
@@ -16,7 +16,7 @@ The functions, the registers, the pad table, the tests and the limits are in [`d
 
 ## The two cores
 
-Only the first core runs after reset, and until `RUN` is written the chip behaves as `to2610-soc` does. Writing 1 to `0x4004_0004` releases the second core. It starts in the flash at `0x2000_0000`, in the megabyte the boot loader leaves free; fetching from the flash is too slow for a tick interrupt, so its image begins by copying itself to the top megabyte of the SDRAM.
+Only the first core runs after reset, and until `RUN` is written the chip behaves as `to2610-kvc` does. Writing 1 to `0x4004_0004` releases the second core. It starts in the flash at `0x2000_0000`, in the megabyte the boot loader leaves free; fetching from the flash is too slow for a tick interrupt, so its image begins by copying itself to the top megabyte of the SDRAM.
 
 The second core has no UART. It writes a word to `MSG_A` and rings `BELL_A`, which reaches the first core as PLIC source 26; `MSG_B` and `BELL_B` go the other way, the bell arriving as the second core's machine external interrupt.
 
@@ -30,7 +30,7 @@ $ ran test to2610-amp                     # the chip tests, on the Verilog file 
 $ ran asic to2610-amp                     # to2610_amp.v, ecc at 50 MHz, report.json
 ```
 
-The chip tests run on Verilator with pin-level models of the SDRAM, the flash and the UART: the tests of `to2610-kvc` and `to2610-soc` unchanged, then `htest/amp`, where FreeRTOS on the second core passes five numbers through a queue and reports each to the first core by doorbell. On its way up the second core posts where it has got to, and the first core prints it.
+The chip tests run on Verilator with pin-level models of the SDRAM, the flash and the UART: the tests of `to2610-kvc` unchanged, then `htest/amp`, where FreeRTOS on the second core passes five numbers through a queue and reports each to the first core by doorbell. On its way up the second core posts where it has got to, and the first core prints it.
 
 ## License
 

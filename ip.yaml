@@ -6,7 +6,7 @@ lang: verilog
 identity:
   slug: to2610-amp
   display_name: Two-core asymmetric chip, Linux beside an RTOS
-  summary: 'An asymmetric two-core chip for the ECOS 2610 shuttle: to2610-soc with a second KianV core that runs an RTOS beside Linux, sharing the bus through an arbiter and talking through a page of doorbells.'
+  summary: 'An asymmetric two-core chip for the ECOS 2610 shuttle: to2610-kvc with a second KianV core that runs an RTOS beside Linux, sharing the bus through an arbiter and talking through a page of doorbells.'
   category: soc
   subcategories:
   - riscv
@@ -22,12 +22,11 @@ contract:
 deps:
   gf180mcu-kianv-rv32ima-sv32: ^0.1
   to2610-kvc: ^0.1
-  to2610-soc: ^0.1
 emit:
 - kind: foreign
   lang: sv
-  top: soc_frame
-  # 源码树是拼出来的：to2610-soc 拼好的那一份套上本仓的补丁，加仲裁与核间那一页
+  top: chip_core
+  # 源码树是拼出来的：黑盒仓拼好的那一份（to2610-kvc 的那一颗）套上本仓的补丁，加仲裁与核间那一页
   setup: src
   rtl:
   - build/src/chip_core.sv
@@ -57,20 +56,19 @@ emit:
     active: low
     sync: false
   ports:
+  # 引脚与 to2610-kvc 逐位相同：上游并成的那条 54 位双向焊盘总线
   - endpoint: pads
     kind: physical
-    type: SocPads
+    type: KianvPads
     map:
       i: bidir_in
       o: bidir_out
       oe: bidir_oe
-  - endpoint: xpads
-    kind: physical
-    type: SocXPads
-    map:
-      i: x_in
-      o: x_out
-      oe: x_oe
+      cs: bidir_cs
+      sl: bidir_sl
+      ie: bidir_ie
+      pu: bidir_pu
+      pd: bidir_pd
   limits:
   - 两个核轮着用一条总线，换人要空三拍；两个都在忙时各自比单核慢一半上下
   - 第二个核没有自己的串口与外部中断控制器，只有 CLINT 与一根门铃中断
@@ -80,17 +78,17 @@ asic:
   frame: mpc
   mhz: 50
   flow: syn_sta
-  # 引脚与 to2610-soc 逐位相同：两颗用同一块底板
+  # 引脚与 to2610-kvc 逐位相同，原样占 payload 的 0 到 53 位：两颗用同一块底板
   pads:
   - { in: bidir_in, out: bidir_out, oe: bidir_oe }
-  - { in: x_in, out: x_out, oe: x_oe }
+  unused: [bidir_cs, bidir_sl, bidir_ie, bidir_pu, bidir_pd]
 tasks:
   src:
-    desc: 拼源码树：to2610-soc 拼好的那一份套上 patch/amp.patch，加本仓 hwsrc 里的仲裁与核间那一页
-    run: bash htest/setup.sh {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-soc}}
+    desc: 拼源码树：黑盒仓拼好的那一份套上 patch/amp.patch，加本仓 hwsrc 里的仲裁与核间那一页
+    run: bash htest/setup.sh {{dep.gf180mcu-kianv-rv32ima-sv32}}
   chip:
-    desc: 出流片的 .v，在它上面跑 to2610-kvc 与 to2610-soc 的各段，再跑两个核一起的那一段
-    run: bash htest/chip.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}} {{dep.to2610-soc}}
+    desc: 出流片的 .v，在它上面跑 to2610-kvc 的各段，再跑两个核一起的那一段
+    run: bash htest/chip.sh {{out}} {{dep.gf180mcu-kianv-rv32ima-sv32}} {{dep.to2610-kvc}}
     timeout: 14400
 test:
   upstream:
