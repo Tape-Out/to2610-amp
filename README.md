@@ -30,7 +30,7 @@ $ ran test to2610-amp                     # the chip tests, on the Verilog file 
 $ ran asic to2610-amp                     # to2610_amp.v, ecc at 50 MHz, report.json
 ```
 
-The chip tests run on Verilator with pin-level models of the SDRAM, the flash and the UART: the tests of `to2610-kvc` unchanged, then `htest/amp`, where FreeRTOS on the second core passes five numbers through a queue and reports each to the first core by doorbell. On its way up the second core posts where it has got to, and the first core prints it.
+The chip tests run on Verilator with pin-level models of the SDRAM, the flash and the UART: the bare-metal tests of `to2610-kvc` unchanged (`hello`, `periph`, `isa`, `arch-test`, `boot`), then `htest/amp`, where FreeRTOS on the second core passes five numbers through a queue and reports each to the first core by doorbell. On its way up the second core posts where it has got to, and the first core prints it.
 
 ## License
 
